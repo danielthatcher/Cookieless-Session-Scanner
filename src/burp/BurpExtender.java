@@ -1,12 +1,15 @@
 package burp;
 
+import java.io.PrintWriter;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
-public class BurpExtender implements  IBurpExtender, IScannerCheck {
+public class BurpExtender implements  IBurpExtender, IScannerCheck, IScannerInsertionPointProvider {
     private IBurpExtenderCallbacks callbacks;
     private IExtensionHelpers helpers;
     private HashSet<String> scannedURLs;
@@ -21,6 +24,7 @@ public class BurpExtender implements  IBurpExtender, IScannerCheck {
 
         callbacks.setExtensionName("ASP.NET Cookieless Session Scanner");
         callbacks.registerScannerCheck(this);
+        callbacks.registerScannerInsertionPointProvider(this);
     }
 
     private String generateSessionId() {
@@ -115,6 +119,65 @@ public class BurpExtender implements  IBurpExtender, IScannerCheck {
         // If this method is being called, something that gone wrong for our host checking.
         return -1;
     }
+
+    @Override
+    public List<IScannerInsertionPoint> getInsertionPoints(IHttpRequestResponse basePair) {
+        // Check if a cookieless session in the path
+        String path = helpers.analyzeRequest(basePair).getUrl().getPath();
+        Pattern p = Pattern.compile("^/\\([A-Z]\\(([a-z0-5]{24})\\)\\)");
+        Matcher m = p.matcher(path);
+        if (!m.find()) {
+            return null;
+        }
+
+        String sessionId = m.group(1);
+        List<IScannerInsertionPoint> insertions = new ArrayList<IScannerInsertionPoint>();
+        insertions.add(new CustomInsertionPoint(basePair.getRequest(), sessionId));
+        return insertions;
+    }
+
+    class CustomInsertionPoint implements IScannerInsertionPoint {
+        private String sessionId;
+        private int insertionStart;
+        private byte[] baseRequest;
+
+        public CustomInsertionPoint(byte[] request, String sessionId) {
+            this.sessionId = sessionId;
+            this.insertionStart = helpers.bytesToString(request).indexOf(sessionId);
+            this.baseRequest = request;
+        }
+
+        @Override
+        public String getInsertionPointName() {
+            return "ASP.NET Cookieless Session";
+        }
+
+        @Override
+        public String getBaseValue() {
+            return this.sessionId;
+        }
+
+        @Override
+        public byte[] buildRequest(byte[] payload) {
+            // Replace the sessionId
+            byte[] newReq = new byte[baseRequest.length - sessionIdLength + payload.length];
+            System.arraycopy(baseRequest, 0, newReq, 0, insertionStart);
+            System.arraycopy(payload, 0, newReq, insertionStart, payload.length);
+            System.arraycopy(baseRequest, insertionStart+sessionIdLength, newReq, insertionStart+payload.length, baseRequest.length - insertionStart - sessionIdLength);
+            return newReq;
+        }
+
+        @Override
+        public int[] getPayloadOffsets(byte[] payload) {
+            return new int[]{insertionStart, insertionStart + payload.length};
+        }
+
+        @Override
+        public byte getInsertionPointType() {
+            //return INS_EXTENSION_PROVIDED;
+            return INS_URL_PATH_FOLDER;
+        }
+    }
 }
 
 class CustomScanIssue implements IScanIssue {
@@ -192,3 +255,4 @@ class CustomScanIssue implements IScanIssue {
         return this.httpService;
     }
 }
+
