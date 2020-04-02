@@ -71,17 +71,19 @@ public class BurpExtender implements  IBurpExtender, IScannerCheck, IScannerInse
                 helpers.stringToBytes(testRequest));
 
         // Check if the new response contains our payload
-        List<int[]> responseMatches = getMatches(newPair.getResponse(), helpers.stringToBytes(sessionId));
+        int bodyOffset = helpers.analyzeResponse(newPair.getResponse()).getBodyOffset();
+        List<int[]> responseMatches = getMatches(newPair.getResponse(), helpers.stringToBytes(sessionId), bodyOffset);
         if (responseMatches.size() == 0) {
             return null;
         }
 
         // Create the issue
         List<IScanIssue> issues = new ArrayList<>(1);
-        List<int[]> requestMatches = getMatches(newPair.getRequest(), helpers.stringToBytes(payload));
-        short code = helpers.analyzeResponse(newPair.getResponse()).getStatusCode();
+        List<int[]> requestMatches = getMatches(newPair.getRequest(), helpers.stringToBytes(payload), 0);
+        short newCode = helpers.analyzeResponse(newPair.getResponse()).getStatusCode();
+        short oldCode = helpers.analyzeResponse(basePair.getResponse()).getStatusCode();
         String confidence;
-        if (code >= 300) {
+        if (newCode >= 300 || newCode != oldCode) {
             confidence = "Tentative";
         } else {
             confidence = "Firm";
@@ -98,12 +100,9 @@ public class BurpExtender implements  IBurpExtender, IScannerCheck, IScannerInse
     }
 
     // From https://github.com/PortSwigger/example-scanner-checks/blob/master/java/BurpExtender.java
-    private List<int[]> getMatches(byte[] target, byte[] match)
-    {
+    private List<int[]> getMatches(byte[] target, byte[] match, int start) {
         List<int[]> matches = new ArrayList<int[]>();
-        int start = 0;
-        while (start < target.length)
-        {
+        while (start < target.length) {
             start = helpers.indexOf(target, match, true, start, target.length);
             if (start == -1) {
                 break;
