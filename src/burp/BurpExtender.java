@@ -77,17 +77,17 @@ public class BurpExtender implements  IBurpExtender, IScannerCheck, IScannerInse
             return null;
         }
 
+        // This is so rarely an actual issue, so don't report
+        short newCode = helpers.analyzeResponse(newPair.getResponse()).getStatusCode();
+        short oldCode = helpers.analyzeResponse(basePair.getResponse()).getStatusCode();
+        if (newCode >= 300 || newCode != oldCode) {
+            return null;
+        }
+
         // Create the issue
         List<IScanIssue> issues = new ArrayList<>(1);
         List<int[]> requestMatches = getMatches(newPair.getRequest(), helpers.stringToBytes(payload), 0);
-        short newCode = helpers.analyzeResponse(newPair.getResponse()).getStatusCode();
-        short oldCode = helpers.analyzeResponse(basePair.getResponse()).getStatusCode();
-        String confidence;
-        if (newCode >= 300 || newCode != oldCode) {
-            confidence = "Tentative";
-        } else {
-            confidence = "Firm";
-        }
+        String confidence = "Tentative";
         issues.add(new CustomScanIssue(
                 newPair.getHttpService(),
                 helpers.analyzeRequest(basePair).getUrl(),
