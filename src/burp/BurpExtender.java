@@ -44,57 +44,61 @@ public class BurpExtender implements  IBurpExtender, IScannerCheck, IScannerInse
 
     @Override
     public List<IScanIssue> doActiveScan(IHttpRequestResponse basePair, IScannerInsertionPoint insertionPoint) {
-        // Don't scan the same host more than once. We don't care about insertion points here, and we don't care about
+        // Don't scan the same path more than once. We don't care about insertion points here, and we don't care about
         // the same path with different query strings and fragments
         URL url = helpers.analyzeRequest(basePair).getUrl();
         String query = url.getQuery();
-        String pathless;
+        String queryless;
         if (query != null) {
-            pathless = url.toString().replace("?" + url.getQuery(), "");
+            queryless = url.toString().replace("?" + url.getQuery(), "");
         } else {
-            pathless = url.toString();
+            queryless = url.toString();
         }
 
-        if (this.scannedURLs.contains((pathless))) {
+        if (this.scannedURLs.contains((queryless))) {
             return null;
         }
 
-        this.scannedURLs.add(pathless);
+        this.scannedURLs.add(queryless);
 
         // Generate and send the new request
         String path = url.getPath();
-        String sessionId = generateSessionId();
-        String payload = "(S(" + sessionId + "))";
-        String newPath = "/" + payload + path;
-        String testRequest = helpers.bytesToString(basePair.getRequest()).replaceFirst(path, newPath);
-        IHttpRequestResponse newPair = callbacks.makeHttpRequest(basePair.getHttpService(),
-                helpers.stringToBytes(testRequest));
+        List<IScanIssue> issues = new ArrayList<>();
+        for (int i = 0; i<path.length(); i++) {
+            if (path.charAt(i) == '/') {
+                String sessionId = generateSessionId();
+                String payload = "(S(" + sessionId + "))";
+                String newPath = path.substring(0, i) + "/" + payload + path.substring(i);
+                String testRequest = helpers.bytesToString(basePair.getRequest()).replaceFirst(path, newPath);
+                IHttpRequestResponse newPair = callbacks.makeHttpRequest(basePair.getHttpService(),
+                        helpers.stringToBytes(testRequest));
 
-        // Check if the new response contains our payload
-        int bodyOffset = helpers.analyzeResponse(newPair.getResponse()).getBodyOffset();
-        List<int[]> responseMatches = getMatches(newPair.getResponse(), helpers.stringToBytes(sessionId), bodyOffset);
-        if (responseMatches.size() == 0) {
-            return null;
+                // Check if the new response contains our payload
+                int bodyOffset = helpers.analyzeResponse(newPair.getResponse()).getBodyOffset();
+                List<int[]> responseMatches = getMatches(newPair.getResponse(), helpers.stringToBytes(sessionId), bodyOffset);
+                if (responseMatches.size() == 0) {
+                    return null;
+                }
+
+                // This is so rarely an actual issue, so don't report
+                short newCode = helpers.analyzeResponse(newPair.getResponse()).getStatusCode();
+                short oldCode = helpers.analyzeResponse(basePair.getResponse()).getStatusCode();
+                if (newCode >= 300 || newCode != oldCode) {
+                    return null;
+                }
+
+                // Create the issue
+                List<int[]> requestMatches = getMatches(newPair.getRequest(), helpers.stringToBytes(payload), 0);
+                String confidence = "Tentative";
+                issues.add(new CustomScanIssue(
+                        newPair.getHttpService(),
+                        helpers.analyzeRequest(basePair).getUrl(),
+                        new IHttpRequestResponse[] {callbacks.applyMarkers(newPair, requestMatches, responseMatches)},
+                        sessionId,
+                        confidence
+                ));
+            }
         }
-
-        // This is so rarely an actual issue, so don't report
-        short newCode = helpers.analyzeResponse(newPair.getResponse()).getStatusCode();
-        short oldCode = helpers.analyzeResponse(basePair.getResponse()).getStatusCode();
-        if (newCode >= 300 || newCode != oldCode) {
-            return null;
-        }
-
-        // Create the issue
-        List<IScanIssue> issues = new ArrayList<>(1);
-        List<int[]> requestMatches = getMatches(newPair.getRequest(), helpers.stringToBytes(payload), 0);
-        String confidence = "Tentative";
-        issues.add(new CustomScanIssue(
-                newPair.getHttpService(),
-                helpers.analyzeRequest(basePair).getUrl(),
-                new IHttpRequestResponse[] {callbacks.applyMarkers(newPair, requestMatches, responseMatches)},
-                sessionId,
-                confidence
-        ));
 
         return issues;
     }
@@ -181,7 +185,7 @@ public class BurpExtender implements  IBurpExtender, IScannerCheck, IScannerInse
 
 class CustomScanIssue implements IScanIssue {
     private final String name = "ASP.NET Cookieless Sessions Supported";
-    private final String severity = "High";
+    private final String severity = "Medium";
 
     private IHttpService httpService;
     private URL url;
